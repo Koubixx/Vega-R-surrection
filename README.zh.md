@@ -1,0 +1,366 @@
+# 两张 2017 年的 Vega 56 组成 16 GB 大模型推理节点
+
+[English](README.md) · [Français](README.fr.md) · **中文**
+
+**42 tok/s · 64K 上下文 · 实测 226K · 200 W · 总成本约 220 欧元**
+
+---
+
+## 缘起
+
+这是一个可以正常工作的大模型推理节点，用的全部是没人会为这个任务挑选的硬件。
+下面每一个数字都是实测结果。
+
+- 两张 **AMD Radeon RX Vega 56** —— 2017 年产品，GCN5 架构（`gfx900`），每张 8 GB HBM2
+- 一台二手购入、**60 欧元**的 **HP Z440** 工作站
+- **62 GB DDR4**，在内存还不值钱的年代从垃圾堆里捡回来的
+- 一颗 **Xeon E5-2683 v4**（16 核 32 线程，2016 年）
+
+它运行一个 190 亿参数的 MoE 模型（激活参数 30 亿），生成速度 **42 tok/s**，
+稳定支撑 **64K 上下文**，并在 **226 205 tokens** 的长度上验证无截断 —— 同时
+整机始终维持在**每卡 100 W 的功耗上限**之内，而电源的 GPU 供电轨上限只有 225 W。
+
+含显卡在内，总成本约 **220 欧元**。
+
+| | |
+|---|---|
+| 模型 | Groot-19B-A3B —— 总参数 19.3 B，激活 3 B，40 层（10 层全注意力 + 30 层线性注意力），128 路由专家 + 1 共享专家（每次激活 8 个），隐藏维度 2048，原生上下文 262 144 |
+| 量化 | `Q5_K_S`，13.76 GB |
+| 生成速度 | **42.3 tok/s**（temp 0.7，1200 tokens 输出） |
+| 预填充 | **593 tok/s**（18800 tokens 提示词） |
+| 上下文 | 65 536 舒适区 · 226 205 实测通过 |
+| 显存 | 每卡 8.0 GB 中占用 7.39 / 7.09 GB |
+| 功耗 | 每卡 100 W 上限；持续负载实测峰值 204 W |
+| 后端 | llama.cpp `b12383`，Vulkan |
+| 系统 | Ubuntu 24.04.5 LTS |
+
+---
+
+## 为什么可行
+
+这份负载有两个特性让老硬件依然可用，而这两点经常被误解。
+
+### 一、解码受限于内存带宽，而不是算力
+
+批大小为 1 时，大模型每生成一个 token 需要把激活参数读一遍，每字节所配的算术
+运算量很小。因此吞吐取决于**内存带宽**，而不是核心频率。Vega 56 至今仍有
+**409 GB/s 的 HBM2 带宽** —— 在 2026 年依然可观，甚至优于不少当代消费级显卡。
+
+这正是功耗上限能奏效的全部原因。我们运行在：
+
+```
+SCLK  1000 MHz  （原厂加速 ≈ 1470–1590 MHz）   →  −32 %
+MCLK   800 MHz  （原厂频率，未改动）
+```
+
+只损失约 **20% 吞吐**，却省下约 **40% 功耗**。如果去动 MCLK，后果会是灾难性的：
+HBM 频率与解码速度几乎成正比。
+
+数字验算：30 亿激活参数按约 5.6 bit/权重计，每个 token 需要流式读取约 2.1 GB。
+42 tok/s 即 **88 GB/s 实际带宽**，而两卡合计峰值 819 GB/s。用掉 11% 的峰值对
+批大小 1 的解码来说完全正常 —— 也正因如此，降核心频率才这么便宜。
+
+### 二、线性注意力改变了显存预算
+
+40 层中有 30 层使用线性注意力，KV 缓存的增长速度远低于传统 Transformer。
+上下文从 64K 翻倍到 128K，只增加了 **约 0.6 GB**。换成同规模的稠密 19B 模型，
+在 16 GB 上绝无可能跑到 226K。
+
+---
+
+## 问题：机器自己关机
+
+原厂配置下，节点在负载中会**直接断电** —— 没有内核 panic，没有 OOM，没有温度
+保护记录，`journalctl` 里什么都没有。就是生成到一半机器死了，而且总是发生在
+大提示词开始预填充后的几秒内。
+
+Z440 的电源是 700 W，供一颗 120 W 的 Xeon 加两张显卡绰绰有余。但它的
+**GPU 供电轨在两条 6-pin 上被限制在 225 W**。
+
+### 根因：DPM 瞬态，而不是平均功耗
+
+AMD 的动态电源管理（DPM）在负载到来时按档位逐步抬升核心频率和电压。每一档都是
+一次电流阶跃，而电源的过流保护响应的是**边沿**，不是稳态值。
+
+三个观察证明这是瞬态问题而非总功耗问题：
+
+1. 断电发生在负载**起始瞬间**，而不是持续数分钟后。
+2. **自动模式下即使把上限压到 80 W，依然断电** —— 上限限制的是均值，DPM 照样
+   产生边沿。
+3. **锁定频率后问题彻底消失**，而且平均功耗比失败的 80 W 配置还*更高*
+   （峰值 204 W，8 次压力测试 8 次通过，零断电）。
+
+问题从来不是要多少电，而是一次要多快。
+
+### 解决方法
+
+两个内核参数，外加一个 systemd 单元。
+
+```
+amdgpu.ppfeaturemask=0xffffffff   # 启用 overdrive 接口
+amdgpu.bapm=0                     # 关闭 Vega 的 TDP 突发特性
+```
+
+`ppfeaturemask` 必须包含 overdrive 位，否则 `pp_od_clk_voltage` 是空的，完全无法
+调整电压 —— 常见默认值 `0xfff7bfff` 恰好把这一位关掉了。`bapm` 是 Vega 特有功能，
+允许显卡在突发时超过额定 TDP，是功耗尖峰的一个有文档但极少被提及的来源。
+
+**写入顺序不是小事：**
+
+1. 先写功耗上限 —— 提交 overdrive 档位可能把它重置掉。
+2. 写入 overdrive 档位：`s <索引> <MHz> <mV>`，再 `c` 提交。
+3. **先切到** `manual` **再**写 DPM 索引，否则调速器会在下一个 tick 覆盖掉。
+4. overdrive 提交之后重新确认功耗上限。
+
+参见 [`scripts/gpu-setup-pin.sh`](scripts/gpu-setup-pin.sh) 与
+[`docs/power-and-clocks.md`](docs/power-and-clocks.md)（英文）。
+
+| 配置 | 预填充 | 生成 | 断电 |
+|---|---|---|---|
+| DPM 自动，80 W 上限 | 491 tok/s | 22.8 tok/s | 有 |
+| **频率锁定，100 W 上限** | **611 tok/s** | **38.1 tok/s** | **无（8/8）** |
+
+锁定频率的配置**既更快又更稳**。自动 DPM 并没有更好地利用余量 —— 它只是在状态
+之间来回震荡，而每一次切换都是一次风险。
+
+---
+
+## 软件栈
+
+ROCm 早已放弃 `gfx900`。对 GCN5 来说，**Vulkan 是务实的选择**，并且可以直接使用
+Ubuntu 自带的 `mesa-vulkan-drivers`。
+
+```bash
+cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc) --target llama-server llama-cli
+```
+
+在这颗 Xeon 上需要 15 到 30 分钟 —— 在决定动手改任何代码之前，最好先知道这个成本。
+
+实际可用的启动命令：
+
+```bash
+./llama-server \
+  -m Groot-Q5_K_S.gguf \
+  -c 65536 -np 1 \
+  -ngl 99 -dev Vulkan0,Vulkan1 \
+  -sm layer -fa on \
+  --reasoning off --chat-template-kwargs '{"enable_thinking":false}' \
+  --temp 0.7 --top-p 0.80 --top-k 20 --min-p 0.0 \
+  --presence-penalty 0.0 --repeat-penalty 1.0 \
+  --host 0.0.0.0 --port 8080 --jinja --alias groot-19b-a3b
+```
+
+| 参数 | 为什么重要 |
+|---|---|
+| `-sm layer` | **必须。** `row` 需要 `ggml_backend_split_buffer_type`，`ggml-vulkan` 没有实现 → *“device Vulkan0 does not support split buffers”*。`tensor` 可用但没有任何收益。 |
+| `-np 1` | 默认 4 个 slot；单用户场景下只会把 KV 预算切碎。 |
+| `-fa on` | KV 被量化时 Flash Attention 会静默关闭。 |
+| 不加 `-ctk/-ctv` | KV 保持 f16。这个模型上量化 KV 几乎没有收益，还会关掉 FA。 |
+| `--reasoning off` | 可用选项中延迟收益最大的一项 —— 见下文。 |
+| `--presence-penalty 0.0` | 模型卡推荐 1.5，但在这里要付出 **19%** 的代价。 |
+
+---
+
+## 实测数据
+
+以下全部来自这台节点。方法：读取 llama.cpp 服务端的 `predicted_per_second`，
+生成 900–1200 tokens，`-np 1`，除特别说明外 KV 为 f16。
+
+### 量化：速度差异可以忽略
+
+64K 上下文、`presence_penalty=0`、其余参数一致：
+
+| 量化 | 文件大小 | 每卡显存 | 生成 | 预填充 |
+|---|---|---|---|---|
+| IQ4_XS | 10.94 GB | 5.97 / 5.80 GB | 43.0 tok/s | 599 tok/s |
+| Q4_K_M | 12.48 GB | 6.77 / 6.50 GB | **44.1 tok/s** | 604 tok/s |
+| **Q5_K_S** | 13.76 GB | 7.39 / 7.09 GB | 42.3 tok/s | 593 tok/s |
+
+**模型体积相差 2.8 GB，速度只差 4%**，预填充几乎无差别。在一个 10 题的
+“编排器”基准（算术、JSON 输出、指令遵循、shell 知识、逻辑）上，质量同样难分
+伯仲：8/10、8/10、7/10 —— 唯一的差异是某道逻辑题的作答语言，而不是正确性。
+
+**结论：** 用剩余的显存换质量，几乎是免费的。Q5_K_M（14.72 GB）及以上会超出
+16.3 GB 的可用显存。
+
+### 上下文：生成缓慢下滑，预填充断崖式下跌
+
+IQ4_XS，KV `q8_0`，100 W 上限：
+
+| 上下文 | 生成 | 预填充 | 灌满整个窗口的耗时 |
+|---|---|---|---|
+| 16K | 37.2 tok/s | 619 tok/s | 30 秒 |
+| 64K | ~30 tok/s | 613 tok/s | 1 分 47 秒 |
+| 113K | 24.2 tok/s | 179 tok/s（边际） | 约 10 分钟 |
+| 226K | 16.6 tok/s | 168 tok/s | **22 分钟** |
+| 262K | 可加载，但 1.2 GB 溢出到 GTT | — | — |
+
+上下文放大 14 倍，生成速度只掉到 2.2 分之一。长上下文真正的代价是**预填充** ——
+摄入 226K tokens 需要 22 分钟。
+
+`-c 262144` 能加载（7.56 GB 显存 + 1.2 GB GTT），但 llama.cpp 会警告
+`failed to fit params to free device memory` 并试图减少层数；`-ngl 99` 阻止了
+这一行为，也就是说确实超出了预算。**131 072 是舒适的上限。**
+
+226K 的测试是真实的：`n_tokens = 226236, truncated = 0`，预填充 1347 秒，
+生成 16.6 tok/s。
+
+### KV 量化：这个模型上没必要
+
+| KV | 上下文 | 预填充 | 生成 |
+|---|---|---|---|
+| f16 | 32K | 611 tok/s | 38.1 tok/s |
+| `q8_0` | 64K | 613 tok/s | 37.6 tok/s |
+| `q5_1` | 64K | **520 tok/s** | 34.9 tok/s |
+
+`q8_0` 省下约 100 MB 且零代价 —— 但 64K 下本就不需要。`q5_1` 同样只省约 100 MB，
+却要**付出 15% 的预填充**：在注意力内部反量化 q5_1 比 q8_0 的布局更昂贵。KV 用
+f16 时 Flash Attention 保持启用；KV 量化后它会被关闭
+（`Flash Attention over K/V rows not supported`）。
+
+### MTP / NextN：确实存在，可以工作，但得不偿失
+
+GGUF 里带有一层 0.4 B 的 MTP —— `blk.40` 包含完整的注意力块、MoE FFN，以及
+`nextn.eh_proj / enorm / hnorm / shared_head_norm`，同时元数据中
+`qwen35moe.nextn_predict_layers = 1`。
+
+加载时的 `unused tensor blk.40.nextn.* -- ignoring` 警告是**正常的**：只有把上下文
+创建为 `LLAMA_CONTEXT_TYPE_MTP` 时（即 `--spec-type draft-mtp`）才会分配这一块。
+不需要写任何代码，`src/models/qwen35moe.cpp` 中已有支持。
+
+它能跑。只是不划算：
+
+| `--spec-draft-n-max` | 接受率 | 生成 | 预填充 |
+|---|---|---|---|
+| 关闭 | — | 37.3 tok/s | **621 tok/s** |
+| 1 | 84.1% | **39.5 tok/s（+5.8%）** | 511 tok/s（−18%） |
+| 2 | 65.2% | 36.4 tok/s | 509 tok/s |
+| 3 | 49.0% | 28.7 tok/s（−23%） | 506 tok/s |
+
+在 `n_max=3`、温度 0.7 的真实使用中：接受率降到 **28.8%**，吞吐降到 27.9 tok/s ——
+相对同类请求 42.9 tok/s 的基线，**损失 35%**。
+
+原因：一次 draft 前向的耗时约为**完整 40 层前向的 74%**。使用 `-sm layer` 时，
+MTP 块只落在一张卡上，另一张卡在空转 —— 而且每个 draft token 仍要经过共享输出头
+（2048 × 151K 词表投影）。
+
+只有 `n_max=1` 是正收益，且仅限于生成。对长上下文场景，18% 的预填充损失远远
+超过 5.8% 的生成收益。
+
+### `presence_penalty`：用 19% 吞吐换一个不需要的保护
+
+模型卡推荐 `temperature=0.7, top_p=0.80, top_k=20, min_p=0.0,
+presence_penalty=1.5, repetition_penalty=1.0`。仅“存在惩罚”一项就要付出：
+
+| presence_penalty | 生成 | 毫秒/token |
+|---|---|---|
+| 0.0 | **43.0 tok/s** | 23.26 |
+| 0.0（复测） | 43.05 tok/s | 23.23 |
+| **1.5** | **34.8 tok/s** | 28.61 |
+| 1.5（复测） | 34.71 tok/s | 28.81 |
+
+四次测量可复现，误差 ±0.5%。原因在 `src/llama-sampler.cpp`：
+
+```cpp
+for (size_t i = 0; i < cur_p->size; ++i) {                    // 整个词表
+    const auto it = ctx->token_count.find(cur_p->data[i].id); // 每个 token 查哈希表
+    ...
+    logit -= count * freq + (count > 0) * presence;
+}
+cur_p->sorted = false;                                        // 强制全量重排
+```
+
+它每个 token 都遍历全部 151K 个候选，逐个查哈希表，然后把排序标记置为无效 ——
+迫使下一个 token 对 151K 个条目重新排序。`repeat_penalty` 与 `frequency_penalty`
+共用同一个 sampler，所以代价是“全有或全无”：要么三者都取中性值（sampler 自动
+禁用），要么付出完整扫描的代价。
+
+**而且在这个模型上它并不能防止复读。** 1200 tokens 生成、temp 0.7、两个任务
+（穷举列举、技术散文）：
+
+| 任务 | pp | 词数 | 重复 8-gram | 最长连续相同词 | 词汇多样性 |
+|---|---|---|---|---|---|
+| 列举 | 0.0 | 705 | **0** | 2 | 0.454 |
+| 列举 | 1.5 | 594 | **0** | 1 | 0.564 |
+| 散文 | 0.0 | 521 | **0** | 1 | 0.564 |
+| 散文 | 1.5 | 525 | **0** | 1 | 0.560 |
+
+两种情况都没有出现复读。存在惩罚确实做到了它宣称的事 —— 提升词汇多样性
+（0.454 → 0.564），这才是它的真正目的，而非防止复读。对一个输出 JSON 和短状态
+行的编排器来说，它恰恰惩罚了那些**必须**重复的 token（`{`、`"ok"`、`"node"`）。
+如果确实需要防复读，用 `--dry-multiplier`：它只屏蔽重复的 n-gram，而不是打击
+整个词表。
+
+### 指令模式：延迟收益最大的一项
+
+```bash
+--reasoning off --chat-template-kwargs '{"enable_thinking":false}'
+```
+
+已验证：`17 × 23` 在 **4 个 token** 内返回 `391`，`reasoning_content` 不存在，
+没有 ` thinking` 标签。对带推理模式的模型来说，这一项带来的体感延迟改善超过任何
+tok/s 数字 —— 每次回复都少掉数百个隐藏 token。
+
+---
+
+## 最终配置
+
+```bash
+./llama-server \
+  -m Groot-Q5_K_S.gguf -c 65536 -np 1 \
+  -ngl 99 -dev Vulkan0,Vulkan1 -sm layer -fa on \
+  --reasoning off --chat-template-kwargs '{"enable_thinking":false}' \
+  --temp 0.7 --top-p 0.80 --top-k 20 --min-p 0.0 \
+  --presence-penalty 0.0 --repeat-penalty 1.0 \
+  --host 0.0.0.0 --port 8080 --jinja --alias groot-19b-a3b
+```
+
+得到的节点：
+
+| | |
+|---|---|
+| 生成 | 42.3 tok/s |
+| 预填充 | 593 tok/s |
+| 显存 | 7.39 / 7.09 GB —— 每卡约 0.8 GB 余量 |
+| GTT 溢出 | 可忽略（约 400 MB） |
+| 功耗 | 每卡 100 W 上限，锁定 1000/800 MHz |
+
+---
+
+## 复现步骤
+
+1. **先锁定频率。** 在 225 W 的 GPU 供电轨上，不要在此之前跑任何持续推理 ——
+   [docs/power-and-clocks.md](docs/power-and-clocks.md)。
+2. **用 Vulkan 编译 llama.cpp** —— [docs/software-stack.md](docs/software-stack.md)。
+3. **规划量化与上下文** —— [docs/memory-budget.md](docs/memory-budget.md)。
+4. **原始测量表格** —— [docs/benchmarks.md](docs/benchmarks.md)。
+
+```
+scripts/
+  gpu-setup-pin.sh      应用功耗上限 + overdrive + 锁定频率（幂等）
+  gpu-tuning.service    systemd 单元，开机自动执行
+  stress-psu.sh         持续负载功耗测试
+  dpm_sweep.sh          扫描上限/频率以找出稳定区间
+  longctx_bench.sh      上下文长度扫描
+  gpu-pinclk.sh         交互式锁定/解锁工具
+  gpu-undervolt.sh      早期的独立降压尝试（已被取代）
+```
+
+---
+
+## 注意事项
+
+- **批大小 1、单用户。** 以上结论都不适用于批量服务场景；现代显卡在
+  tokens/watt 上会大幅领先。
+- 225 W 的供电轨限制是 HP Z440 特有的。其他机箱情况不同 —— 但频率仍然值得锁定，
+  它同时也能省电。
+- 这个模型是线性注意力占比很高的 MoE。稠密 19B 模型在 16 GB 上绝不可能接近 226K。
+- `gpu-tuning.service` 在手动启动时验证可用；**唯一未验证的是开机时相对 `amdgpu`
+  初始化顺序的时序。**
+- 价格是 2026 年欧洲二手行情。这个练习的意义在于让老硅片继续有用，而不是打赢
+  一张 3090。
+
+## 许可证
+
+脚本与文字采用 MIT。模型权重归其作者所有。

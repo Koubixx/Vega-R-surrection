@@ -1,0 +1,12 @@
+[Unit]
+Description=Tuning Vega 56 (cap 100W + OD 1000/850 + frequence figee)
+After=systemd-udev-settle.service graphical.target
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/aitest/bin/gpu-setup-pin.sh
+
+[Install]
+WantedBy=multi-user.target
