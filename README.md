@@ -2,7 +2,7 @@
 
 **English** · [Français](README.fr.md) · [中文](README.zh.md)
 
-**42 tok/s · 64 k context · 226 k verified · 200 W · ~€220 total**
+**42 tok/s · 64 k context · 226 k verified · 200 W**
 
 ---
 
@@ -12,16 +12,14 @@ This is a working LLM inference node built entirely from hardware nobody would
 choose for the job, and every number below was measured on it.
 
 - Two **AMD Radeon RX Vega 56** — 2017, GCN5 (`gfx900`), 8 GB HBM2 each
-- An **HP Z440** workstation bought second-hand for **€60**
-- **62 GB of DDR4** salvaged from a skip when it was worth nothing
+- An **HP Z440** workstation
+- **62 GB of DDR4** salvaged from a skip
 - A **Xeon E5-2683 v4** (16c/32t, 2016)
 
 It serves a 19B-parameter MoE model (3B active) at **42 tok/s**, holds a **64 k
 context** with headroom, and was verified at **226 205 tokens** without
 truncation — while never exceeding a **100 W per-card cap** on a PSU whose GPU
 rail is limited to 225 W.
-
-Total cost, cards included: roughly **€220**.
 
 | | |
 |---|---|
@@ -376,8 +374,8 @@ scripts/
   226 k on 16 GB.
 - `gpu-tuning.service` is verified working when started manually; **boot-time
   ordering against `amdgpu` initialisation is the one unverified thing.**
-- Prices are 2026 second-hand Europe. The exercise is about making old silicon
-  useful, not about beating a 3090.
+- The exercise is about making old silicon useful, not about beating a modern
+  card on a per-watt basis.
 
 ## License
 

@@ -2,7 +2,7 @@
 
 [English](README.md) · **Français** · [中文](README.zh.md)
 
-**42 tok/s · 64 k de contexte · 226 k vérifiés · 200 W · ~220 € au total**
+**42 tok/s · 64 k de contexte · 226 k vérifiés · 200 W**
 
 ---
 
@@ -13,16 +13,14 @@ personne ne choisirait pour ça. Tous les chiffres ci-dessous ont été mesurés
 la machine.
 
 - Deux **AMD Radeon RX Vega 56** — 2017, GCN5 (`gfx900`), 8 Go de HBM2 chacune
-- Une station **HP Z440** achetée d'occasion pour **60 €**
-- **62 Go de DDR4** récupérés dans une poubelle à l'époque où ça ne valait rien
+- Une station **HP Z440** d'occasion
+- **62 Go de DDR4** récupérés dans une poubelle
 - Un **Xeon E5-2683 v4** (16c/32t, 2016)
 
 Elle sert un modèle MoE de 19 milliards de paramètres (3 B actifs) à **42 tok/s**,
 tient un **contexte de 64 k** avec de la marge, et a été vérifiée à **226 205
 tokens** sans troncature — tout en restant sous un **plafond de 100 W par carte**
 sur une alimentation dont le rail GPU est limité à 225 W.
-
-Coût total, cartes comprises : environ **220 €**.
 
 | | |
 |---|---|
@@ -389,8 +387,8 @@ scripts/
   19 B n'approcherait jamais 226 k sur 16 Go.
 - `gpu-tuning.service` est vérifié en lancement manuel ; **l'ordonnancement au boot
   face à l'initialisation d'`amdgpu` est le seul point non validé.**
-- Les prix sont ceux de l'occasion européenne en 2026. L'exercice consiste à rendre
-  du silicium ancien utile, pas à battre une 3090.
+- L'exercice consiste à rendre du silicium ancien utile, pas à battre une carte
+  moderne au watt près.
 
 ## Licence
 
