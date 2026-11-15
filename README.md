@@ -175,6 +175,48 @@ All figures below come from this node. Methodology: llama.cpp server timings
 (`predicted_per_second`), 900–1200 token generations, `-np 1`, KV f16 unless
 stated.
 
+### Standard tooling: llama-bench, perplexity, HellaSwag, Winogrande
+
+Reproducible figures in the format the community publishes. Full tables and the exact
+commands are in [docs/benchmarks.md](docs/benchmarks.md).
+
+| llama-bench, Q5_K_S | t/s |
+|---|---|
+| pp512 | 496.72 ± 4.28 |
+| tg128 | 44.70 ± 0.34 |
+| pp512 @ d16384 | 314.22 ± 1.97 |
+| pp512 @ d65536 | 144.01 ± 0.65 |
+| tg128 @ d65536 | 28.29 ± 0.03 |
+
+| quality | score |
+|---|---|
+| Perplexity, wikitext-2, 120 × 512 tokens | **13.2016 ± 0.2179** |
+| Winogrande, 1267 tasks | **67.01 % ± 1.32** |
+| HellaSwag, 400 of 10 042 tasks | **64.00 %** [59.18 – 68.55] |
+
+HellaSwag and Winogrande come from llama.cpp's built-in scorer, which uses its own
+prompt format. They are valid for comparing two quants on identical ground and are
+**not** comparable to `lm-evaluation-harness` leaderboard numbers.
+
+### Concurrency is the real throughput lever
+
+`llama-batched-bench`, same model and settings:
+
+| concurrent sequences | aggregate generation | per sequence |
+|---|---|---|
+| 1 | **45.0 tok/s** | 45.0 |
+| 2 | 65.0 tok/s | 32.5 |
+| 4 | **78.1 tok/s** | 19.5 |
+
+**+73 % aggregate throughput** going from one to four sequences. With layer split on
+two cards, a single sequence is processed sequentially — GPU0 does its half of the
+layers, then GPU1 does its half — so at batch 1 the second card idles about half the
+time. Batching fills it.
+
+Practical consequence: 45 tok/s is this node's *latency* figure, ~78 tok/s is its
+*throughput* figure. Driving several agents in parallel nearly doubles the tokens per
+second at the cost of longer individual answers.
+
 ### Quantization: the speed difference is negligible
 
 At 64 k context, `presence_penalty=0`, identical flags:

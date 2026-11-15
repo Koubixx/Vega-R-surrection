@@ -1,17 +1,145 @@
-# Raw measurements
+# Measurements
 
-Every number here was produced on the node described in the README. Nothing is
-estimated.
+Two families of numbers live here, and they answer different questions:
 
-## Methodology
+- **Tool benchmarks** (`llama-bench`, `llama-perplexity`, `llama-batched-bench`) —
+  reproducible, with error bars, in the format the community publishes.
+- **Server measurements** — what an HTTP client actually experiences, including the
+  sampling stack.
 
-- Server-side timing: `timings.predicted_per_second` and `prompt_per_second` from
-  the llama.cpp `/v1/chat/completions` response.
-- Generation benchmarks: 900–1 200 tokens, to get past warm-up effects. 64-token
-  runs read ~5 % high and are not used for conclusions.
-- Clock state verified before each run: `pp_dpm_sclk` / `pp_dpm_mclk` must show the
-  same active index throughout. Thermal throttle would silently corrupt results.
-- Temperatures during these runs: 68–72 °C edge, 75–77 °C hotspot.
+Every number was produced on this node. Node state for all runs: 100 W per-card cap,
+clocks pinned at 1000/800 MHz, Q5_K_S unless stated, `-sm layer`, KV f16,
+temperatures 68–72 °C edge / 75–77 °C hotspot.
+
+Clock state was verified before each run: `pp_dpm_sclk` / `pp_dpm_mclk` must show the
+same active index throughout. Thermal throttle would silently corrupt results.
+
+---
+
+# Tool benchmarks
+
+Reproduce any row with the command shown. Build `c56be864f` (b12383).
+
+## llama-bench — depth scaling
+
+```bash
+llama-bench -m Groot-Q5_K_S.gguf -ngl 99 -sm layer \
+  -p 512 -n 128 -d 0,4096,16384,65536 -r 3 -o md
+```
+
+| test | t/s |
+|---|---|
+| pp512 | **496.72 ± 4.28** |
+| tg128 | **44.70 ± 0.34** |
+| pp512 @ d4096 | 445.55 ± 0.86 |
+| tg128 @ d4096 | 43.82 ± 0.28 |
+| pp512 @ d16384 | 314.22 ± 1.97 |
+| tg128 @ d16384 | 40.92 ± 0.09 |
+| pp512 @ d65536 | **144.01 ± 0.65** |
+| tg128 @ d65536 | **28.29 ± 0.03** |
+
+The asymmetry is the headline: prefill loses **71 %** between d0 and d65k, generation
+only **37 %**. Long context on this node costs far more in prompt ingestion than in
+answer speed.
+
+## llama-bench — prompt size sweep
+
+```bash
+llama-bench -m Groot-Q5_K_S.gguf -ngl 99 -sm layer -p 128,512,2048,8192 -n 0 -r 3
+```
+
+| prompt | prefill t/s |
+|---|---|
+| 128 | 303.60 ± 6.08 |
+| 512 | 513.47 ± 3.83 |
+| **2048** | **699.28 ± 1.90** |
+| 8192 | 639.34 ± 3.08 |
+
+Prefill peaks around 2 k tokens. Very short prompts underutilise the GPU (dispatch
+overhead dominates), and past ~8 k the attention cost starts to win. This is the curve
+to look at before tuning `-b`/`-ub`.
+
+## llama-perplexity — objective quality
+
+```bash
+llama-perplexity -m Groot-Q5_K_S.gguf -ngl 99 -sm layer \
+  -f wikitext-2-raw/wiki.test.raw -c 512 --chunks 120
+```
+
+```
+Final estimate: PPL = 13.2016 +/- 0.21789
+```
+
+## Winogrande
+
+```bash
+llama-perplexity -m Groot-Q5_K_S.gguf -ngl 99 -sm layer \
+  -f winogrande-debiased-eval.csv --winogrande
+```
+
+```
+Final Winogrande score (1267 tasks): 67.0087 +/- 1.3214
+```
+
+## HellaSwag
+
+```bash
+llama-perplexity -m Groot-Q5_K_S.gguf -ngl 99 -sm layer \
+  -f hellaswag_val_full.txt --hellaswag --hellaswag-tasks 400
+```
+
+```
+400   64.00000000%   [59.1834%, 68.5502%]
+```
+
+> **Important caveat.** llama.cpp's built-in HellaSwag and Winogrande scoring uses its
+> own prompt format and a log-probability comparison of the candidate continuations.
+> These numbers are **not** comparable to `lm-evaluation-harness` leaderboard figures
+> for the same model. They are useful for comparing two quants *on the same harness* —
+> which is what we needed — and are not a claim about absolute model quality.
+
+## llama-batched-bench — concurrency
+
+```bash
+llama-batched-bench -m Groot-Q5_K_S.gguf -ngl 99 -sm layer \
+  -c 65536 -b 2048 -ub 512 -npp 512,2048 -ntg 128 -npl 1,2,4
+```
+
+| PP | TG | B | N_KV | prefill t/s | generation t/s (agg) | total t/s |
+|---|---|---|---|---|---|---|
+| 512 | 128 | 1 | 640 | 519.91 | **45.00** | 167.14 |
+| 512 | 128 | 2 | 1280 | 522.61 | 64.96 | 216.93 |
+| 512 | 128 | 4 | 2560 | 652.52 | **78.08** | 264.02 |
+| 2048 | 128 | 1 | 2176 | 644.55 | 44.26 | 358.53 |
+| 2048 | 128 | 2 | 4352 | 703.49 | 64.25 | 443.76 |
+| 2048 | 128 | 4 | 8704 | 728.36 | **76.91** | **486.14** |
+
+### The most important table here
+
+Aggregate generation throughput goes **45 → 78 tok/s (+73 %)** from batch 1 to batch 4.
+Per-sequence speed drops (45 → 19.5 tok/s), which is the normal latency/throughput
+trade.
+
+The explanation is structural: with `-sm layer` on two cards, a single sequence is
+processed sequentially — GPU0 does its half of the layers, then GPU1 does its half.
+**At batch 1 the second GPU idles roughly half the time.** Four concurrent sequences
+give both cards real work, and throughput nearly doubles with no software change.
+
+Consequences:
+
+- **Do not judge this node by its single-stream number.** 45 tok/s is its *latency*
+  figure; ~78 tok/s is its *throughput* figure.
+- An orchestrator driving several agents in parallel gets close to 2× the tokens per
+  second out of the same hardware, at the cost of longer individual answers.
+- Any benchmark of two-card layer-split rigs that reports batch-1 numbers only
+  understates them by roughly a factor of two.
+
+---
+
+# Server measurements
+
+What a real HTTP client sees, with sampling active. These differ from `llama-bench`
+because every token also pays the sampler.
 
 Minimal harness (`bench.py`):
 
@@ -29,6 +157,9 @@ resp = json.load(urllib.request.urlopen(r, timeout=1800))
 print(resp["timings"]["predicted_per_second"])
 ```
 
+Generation benchmarks used 900–1 200 tokens to get past warm-up; 64-token runs read
+~5 % high and are not used for conclusions.
+
 ## Power configurations
 
 Groot-19B-A3B IQ4_XS, 16 k prompt, 64 k context:
@@ -41,8 +172,7 @@ Groot-19B-A3B IQ4_XS, 16 k prompt, 64 k context:
 | pinned, sustained stress | 611 tok/s | 38.1 tok/s | **no, 8/8 runs** |
 
 Stress test: 8 consecutive iterations of a 16 k-token prompt. Peak draw measured
-across both cards: **204 W**. Clock indices never moved. Wall-clock total run time
-stable at ±0.9 %.
+across both cards: **204 W**. Clock indices never moved. Wall-clock stability ±0.9 %.
 
 ## Quantization
 
@@ -157,9 +287,29 @@ Repeat/loop screen, 1 200 max tokens, temp 0.7, two prompts:
 | technical prose | 0.0 | 521 | 0 | 1 | 0.564 |
 | technical prose | 1.5 | 525 | 0 | 1 | 0.560 |
 
-## Effective bandwidth check
+---
 
-3 B active parameters at 5.6 bits ≈ 2.1 GB read per token. At 42.3 tok/s:
-**88 GB/s effective**, against 819 GB/s of combined HBM2 peak. Batch-1 decoding
-using ~11 % of peak bandwidth is normal — and explains why halving the core clock
-costs so little.
+# What the numbers say about the ceiling
+
+Effective bandwidth and FLOP utilisation, derived from the llama-bench figures
+(3 B active parameters at 5.79 bits/weight → 2.17 GB read per token):
+
+| metric | value | % of peak |
+|---|---|---|
+| tg128 @ d0 | 97.1 GB/s | **23.7 %** of one card's 409.6 GB/s |
+| tg128 @ d65536 | 61.4 GB/s | 15.0 % |
+| prefill @ d0 | 2.98 TFLOP/s | **41.6 %** of 14.3 TFLOP/s FP16 |
+
+Two honest notes:
+
+1. **The percentage is against one card, not two.** With layer split only one GPU is
+   active at any instant, so 819 GB/s of aggregate bandwidth is never available to a
+   single sequence. Against the cumulated peak we sit at 11.8 %, but that figure is
+   misleading — see the batching table for why.
+2. **The remaining headroom is modest, not dramatic.** gfx900 has no DP4A:
+   `VK_KHR_shader_integer_dot_product` is exposed but
+   `integerDotProduct4x8BitPackedSignedAccelerated = false`, so quantized weights go
+   through dequantise+FMA. Realistic software gains are ~1.5–2.5×, not 4×.
+
+The largest available win is not a kernel at all: **use the batch.** +73 % aggregate
+throughput is sitting there for free.

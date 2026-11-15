@@ -183,6 +183,48 @@ Tous les chiffres viennent de ce nœud. Méthodologie : timings du serveur llama
 (`predicted_per_second`), générations de 900 à 1 200 tokens, `-np 1`, KV f16 sauf
 mention contraire.
 
+### Outillage standard : llama-bench, perplexité, HellaSwag, Winogrande
+
+Des chiffres reproductibles, au format publié par la communauté. Les tableaux complets
+et les commandes exactes sont dans [docs/benchmarks.md](docs/benchmarks.md).
+
+| llama-bench, Q5_K_S | t/s |
+|---|---|
+| pp512 | 496,72 ± 4,28 |
+| tg128 | 44,70 ± 0,34 |
+| pp512 @ d16384 | 314,22 ± 1,97 |
+| pp512 @ d65536 | 144,01 ± 0,65 |
+| tg128 @ d65536 | 28,29 ± 0,03 |
+
+| qualité | score |
+|---|---|
+| Perplexité, wikitext-2, 120 × 512 tokens | **13,2016 ± 0,2179** |
+| Winogrande, 1267 tâches | **67,01 % ± 1,32** |
+| HellaSwag, 400 des 10 042 tâches | **64,00 %** [59,18 – 68,55] |
+
+HellaSwag et Winogrande viennent du scoreur intégré de llama.cpp, qui utilise son
+propre format de prompt. Ils sont valables pour comparer deux quants sur un terrain
+identique et **ne sont pas** comparables aux chiffres de `lm-evaluation-harness`.
+
+### Le parallélisme est le vrai levier de débit
+
+`llama-batched-bench`, même modèle et mêmes réglages :
+
+| séquences simultanées | génération agrégée | par séquence |
+|---|---|---|
+| 1 | **45,0 tok/s** | 45,0 |
+| 2 | 65,0 tok/s | 32,5 |
+| 4 | **78,1 tok/s** | 19,5 |
+
+**+73 % de débit agrégé** en passant d'une à quatre séquences. Avec le split de
+couches sur deux cartes, une séquence seule est traitée séquentiellement — GPU0 fait sa
+moitié des couches, puis GPU1 la sienne — donc à batch 1 la seconde carte tourne au
+ralenti la moitié du temps. Le batch la remplit.
+
+Conséquence pratique : 45 tok/s est le chiffre de *latence* de cette node, ~78 tok/s
+son chiffre de *débit*. Piloter plusieurs agents en parallèle double presque le nombre
+de tokens par seconde, au prix de réponses individuelles plus longues.
+
 ### Quantification : la différence de vitesse est négligeable
 
 À 64 k de contexte, `presence_penalty=0`, options identiques :
