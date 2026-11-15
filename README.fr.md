@@ -332,6 +332,50 @@ cachés disparaissent de chaque réponse.
 
 ---
 
+## Pourquoi 64 k, et pas 226 k
+
+Le modèle supporte 262 144 tokens nativement (~1 M avec YaRN) et cette node a prouvé
+qu'elle peut ingérer **226 205 tokens sans troncature**. On tourne pourtant en 64 k.
+C'est un choix d'ingénierie délibéré, pas un plafond matériel — et c'est la décision
+la plus utile de tout ce montage.
+
+**1. La charge de travail n'en a pas besoin.** Cette node sert un orchestrateur :
+tâches courtes et répétitives, vérification de santé des nodes, suivis, petits appels
+d'outils à sortie structurée. On ne lui demande jamais d'absorber une base de code.
+64 k couvre l'ensemble de travail avec une large marge.
+
+**2. Le contexte se paie deux fois — en VRAM et en temps de prefill.** La génération
+se dégrade doucement avec la profondeur, mais le prefill s'effondre :
+
+| contexte | génération | prefill | temps pour remplir la fenêtre |
+|---|---|---|---|
+| 16 k | 37,2 tok/s | 619 tok/s | 30 s |
+| 64 k | ~30 tok/s | 613 tok/s | 1 min 47 s |
+| 113 k | 24,2 tok/s | 179 tok/s | ~10 min |
+| 226 k | 16,6 tok/s | 168 tok/s | **22 min** |
+
+Un orchestrateur qui répond en secondes ne peut pas se payer 22 minutes d'ingestion
+de prompt. La pénalité sur la génération est modérée ; c'est celle sur le prefill qui
+tue réellement l'usage.
+
+**3. Le contexte entre en concurrence directe avec la quantification.** Chaque token
+de cache KV est de la VRAM retirée aux poids. À 64 k on tourne en **Q5_K_S
+(13,76 Go)** avec 0,8 Go de marge par carte. À 226 k le même modèle déborde en GTT et
+imposerait de descendre en IQ4_XS (10,94 Go). Les mesures disent que la quantification
+coûte **~4 % de débit**, tandis que le contexte supplémentaire coûte **71 % du
+prefill** — l'arbitrage penche donc très nettement vers la qualité à 64 k.
+
+**4. Avec deux cartes en split de couches, le contexte ne rend rien.** À batch 1, une
+seule GPU travaille à la fois (voir les mesures ci-dessus), donc le contexte
+supplémentaire ne devient jamais du parallélisme. C'est un coût pur.
+
+**Ce qui justifierait d'aller plus loin :** une charge de type RAG où un seul prompt
+contient réellement des centaines de milliers de tokens (analyse de dépôt entier,
+résumé de documents longs, forensique de logs). Dans ce cas la node fonctionne
+toujours — 226 k à 16,6 tok/s est utilisable — mais on accepte des minutes de prefill
+et on renonce à la quantification supérieure. Pour de l'orchestration, 64 k est le
+bon point sur la courbe.
+
 ## Configuration finale
 
 ```bash

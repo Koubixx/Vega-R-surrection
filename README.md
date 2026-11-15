@@ -319,6 +319,49 @@ response.
 
 ---
 
+## Why 64 k, and not 226 k
+
+The model supports 262 144 tokens natively (~1 M with YaRN) and this node proved it
+can ingest **226 205 tokens without truncation**. We still run 64 k. That is a
+deliberate engineering choice, not a hardware ceiling — and it is the single most
+useful decision in this build.
+
+**1. The workload does not need more.** This node serves an orchestrator: short and
+repetitive tasks, node health checks, follow-ups, small tool calls with structured
+output. It is never asked to absorb a codebase. 64 k covers the working set with a
+large margin.
+
+**2. Context is paid twice — in VRAM and in prefill time.** Generation degrades
+gently with depth, but prefill collapses:
+
+| context | generation | prefill | time to fill the window |
+|---|---|---|---|
+| 16 k | 37.2 tok/s | 619 tok/s | 30 s |
+| 64 k | ~30 tok/s | 613 tok/s | 1 min 47 s |
+| 113 k | 24.2 tok/s | 179 tok/s | ~10 min |
+| 226 k | 16.6 tok/s | 168 tok/s | **22 min** |
+
+An orchestrator that answers in seconds cannot afford 22 minutes of prompt
+ingestion. The generation penalty is mild; the prefill penalty is what actually
+kills the use case.
+
+**3. Context competes directly with quantization.** Every token of KV cache is VRAM
+taken away from weights. At 64 k we run **Q5_K_S (13.76 GB)** with 0.8 GB of margin
+per card. At 226 k the same model needs GTT spill and would force a drop to
+IQ4_XS (10.94 GB). Measurements say the quantization costs **~4 % of throughput**,
+while the extra context costs **71 % of prefill** — so the trade is heavily in
+favour of quality at 64 k.
+
+**4. With two cards in layer split, context buys nothing back.** At batch 1 only one
+GPU works at a time (see the measurements above), so extra context never becomes
+extra parallelism. It is pure cost.
+
+**What would justify going further:** a retrieval workload where a single prompt
+genuinely contains hundreds of thousands of tokens (whole-repository analysis,
+long-document summarisation, log forensics). In that case the node still works —
+226 k at 16.6 tok/s is usable — but you accept minutes of prefill and you give up
+the higher quantization. For orchestration, 64 k is the right point on the curve.
+
 ## Final configuration
 
 ```bash
