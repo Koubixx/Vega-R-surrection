@@ -450,6 +450,7 @@ Le nœud obtenu :
 2. **Compiler llama.cpp avec Vulkan** — [docs/software-stack.md](docs/software-stack.md).
 3. **Dimensionner quant et contexte** — [docs/memory-budget.md](docs/memory-budget.md).
 4. **Tableaux de mesure bruts** — [docs/benchmarks.md](docs/benchmarks.md).
+5. **Sortie brute des outils** (llama-bench, perplexité, hellaswag, batched) — [results/](results/).
 
 ```
 scripts/

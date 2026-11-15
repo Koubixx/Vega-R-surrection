@@ -408,6 +408,7 @@ tok/s 数字 —— 每次回复都少掉数百个隐藏 token。
 2. **用 Vulkan 编译 llama.cpp** —— [docs/software-stack.md](docs/software-stack.md)。
 3. **规划量化与上下文** —— [docs/memory-budget.md](docs/memory-budget.md)。
 4. **原始测量表格** —— [docs/benchmarks.md](docs/benchmarks.md)。
+5. **工具原始输出**（llama-bench、困惑度、hellaswag、batched）—— [results/](results/)。
 
 ```
 scripts/

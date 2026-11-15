@@ -436,6 +436,7 @@ Resulting node:
 2. **Build llama.cpp with Vulkan** — [docs/software-stack.md](docs/software-stack.md).
 3. **Size your quant and context** — [docs/memory-budget.md](docs/memory-budget.md).
 4. **Raw measurement tables** — [docs/benchmarks.md](docs/benchmarks.md).
+5. **Verbatim tool output** (llama-bench, perplexity, hellaswag, batched) — [results/](results/).
 
 ```
 scripts/

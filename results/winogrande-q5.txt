@@ -1,0 +1,4 @@
+0.05.436.242 I winogrande_score : loaded 1267 tasks from prompt.
+0.05.436.245 I winogrande_score : tokenizing selected tasks
+0.05.802.288 I winogrande_score : calculating winogrande score over selected tasks.
+7.03.495.424 I Final Winogrande score(1267 tasks): 67.0087 +/- 1.3214
