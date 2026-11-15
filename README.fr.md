@@ -373,6 +373,31 @@ aucune balise ` thinking`. Sur un modèle doté d'un mode raisonnement, cela vau
 en latence perçue que n'importe quel chiffre de tok/s — des centaines de tokens
 cachés disparaissent de chaque réponse.
 
+### Flags du backend Vulkan : rien à régler
+
+Quatre variables d'environnement `GGML_VK_*` ont été testées en A/B contre les défauts,
+une à la fois (`llama-bench`, échauffement préalable, `-r 5`, médiane retenue, trois
+profondeurs). Seuil d'adoption : > 3 % sur `pp512@d65536` ou `tg128` (un gain `tg128`
+seul n'est gardé que si le prefill ne régresse pas).
+
+| flag | Δ pp512@d65536 | Δ tg128@d65536 | verdict |
+|---|---|---|---|
+| `GGML_VK_ALLOW_GRAPHICS_QUEUE=1` | +0,2 % | +2,9 % | rejeté |
+| `GGML_VK_MAX_NODES_PER_SUBMIT=500` | −0,3 % | +0,2 % | rejeté |
+| `GGML_VK_FORCE_MMVQ=1` | −0,2 % | +0,0 % | rejeté |
+| `GGML_VK_DISABLE_MMVQ=1` | −0,4 % | +0,0 % | rejeté |
+
+**Verdict : on garde les défauts, aucun flag.** `ALLOW_GRAPHICS_QUEUE` est le seul à
+avoir un vrai signal (un gain régulier de +2,2 à +2,9 % sur la génération, sans
+régression du prefill), mais il reste sous le seuil ; les commutateurs MMVQ sont des
+no-op parce que gfx900 n'a pas de DP4A. Tableaux complets et commande exacte dans
+[docs/benchmarks.md](docs/benchmarks.md).
+
+> **Piège du bench :** `llama-bench -dev Vulkan0,Vulkan1` ne *répartit pas* le modèle
+> sur les deux cartes (tout part sur `Vulkan0`, pp512 199 / tg128 8,7 au lieu de
+> 521 / 45,6). `llama-server` n'est pas concerné — le même `-dev` charge bien les deux
+> cartes. Omettre `-dev` pour les benchs, le garder pour le serveur.
+
 ---
 
 ## Pourquoi 64 k, et pas 226 k

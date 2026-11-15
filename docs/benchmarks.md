@@ -291,6 +291,46 @@ Repeat/loop screen, 1 200 max tokens, temp 0.7, two prompts:
 | technical prose | 0.0 | 521 | 0 | 1 | 0.564 |
 | technical prose | 1.5 | 525 | 0 | 1 | 0.560 |
 
+## Vulkan backend flags — A/B
+
+Four `GGML_VK_*` environment variables were tested one at a time against the default,
+to answer whether any of them moves throughput on the Vulkan backend. Method:
+`llama-bench`, one variable per run, a warm-up process before each measured run,
+`-r 5` with the median kept, three context depths (d0, d16384, d65536).
+
+```bash
+./llama-bench -m Groot-Q5_K_S.gguf -ngl 99 -sm layer -fa on \
+  -p 512 -n 128 -d 0 -d 16384 -d 65536 -r 5 -o md
+```
+
+Baseline measured in this campaign (defaults): pp512 521.1, tg128 45.6,
+pp512@d65536 143.9, tg128@d65536 28.2.
+
+| flag | Δ pp512@d65536 | Δ tg128@d65536 | verdict |
+|---|---|---|---|
+| `GGML_VK_ALLOW_GRAPHICS_QUEUE=1` | +0.2 % | **+2.9 %** | reject |
+| `GGML_VK_MAX_NODES_PER_SUBMIT=500` | −0.3 % | +0.2 % | reject |
+| `GGML_VK_FORCE_MMVQ=1` | −0.2 % | +0.0 % | reject |
+| `GGML_VK_DISABLE_MMVQ=1` | −0.4 % | +0.0 % | reject |
+
+Threshold was ±3 % on either decision metric (`pp512@d65536` or `tg128`). None
+crosses it, so the verdict is **run the defaults, set no flag**.
+
+- `ALLOW_GRAPHICS_QUEUE` is the only flag with a real signal — a steady +2.2…+2.9 %
+  on generation, no prefill regression — but it sits under the threshold.
+- `MAX_NODES_PER_SUBMIT` (the "fewer syncs = faster prefill" theory) shows nothing.
+- Forcing or disabling MMVQ shows nothing either, consistent with the established
+  fact that gfx900 has no DP4A: the quantized MMQ path is never selected, weights go
+  through dequant+FMA regardless.
+
+**The `-dev` trap (bench-specific).** `llama-bench -dev Vulkan0,Vulkan1` does **not**
+split the model across the two cards — it loads everything onto `Vulkan0` (VRAM
+card2 = 14 MiB, GTT spill) and reports pp512 199 / tg128 8.7 instead of 521 / 45.6.
+`llama-server` is *not* affected: the same `-dev Vulkan0,Vulkan1` loads both cards
+correctly (≈7.4 / 7.1 GB). So omit `-dev` for benches, keep it for the server. The
+`common_fit_params: failed to fit params` warning is a false positive — it prints even
+when the split works. The only reliable check is VRAM on both cards during the run.
+
 ---
 
 # What the numbers say about the ceiling

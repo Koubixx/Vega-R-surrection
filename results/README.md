@@ -88,6 +88,26 @@ Three independent runs of this command gave 45.00 / 45.20 / 45.21 (B=1),
 64.96 / 65.01 / 64.97 (B=2) and 78.08 / 78.13 / 78.16 tok/s (B=4). Only the third run
 is stored here; the spread is under 0.5 %.
 
+### `vulkan-flags-*.md`
+
+Five files: `vulkan-flags-baseline.md` plus one per tested flag
+(`vulkan-flags-graphics-queue.md`, `vulkan-flags-max-nodes-500.md`,
+`vulkan-flags-force-mmvq.md`, `vulkan-flags-disable-mmvq.md`).
+
+```bash
+# one variable at a time; warm-up process first, then the measured run
+./llama-bench -m Groot-Q5_K_S.gguf -ngl 99 -sm layer -fa on \
+  -p 512 -n 128 -d 0 -d 16384 -d 65536 -r 5 -o md
+```
+
+Each is a full depth table (pp512/tg128 at d0, d16384, d65536) plus the build line.
+Captured 02:08 → 02:36. Verdict (full analysis in
+[../docs/benchmarks.md](../docs/benchmarks.md)): **none of the four flags moves either
+decision metric by more than 3 % — run the defaults, set no flag.**
+
+Note: no `-dev` in these commands — see the `-dev` trap in `benchmarks.md`
+(`llama-bench -dev` does not split across the cards; `llama-server -dev` does).
+
 ## What is not here
 
 - **Q4_K_M and IQ4_XS** were measured for speed and one perplexity pass, then dropped

@@ -339,6 +339,28 @@ cur_p->sorted = false;                                        // 强制全量重
 没有 ` thinking` 标签。对带推理模式的模型来说，这一项带来的体感延迟改善超过任何
 tok/s 数字 —— 每次回复都少掉数百个隐藏 token。
 
+### Vulkan 后端标志位：没什么可调的
+
+四个 `GGML_VK_*` 环境变量逐一与默认值做了 A/B 对照（`llama-bench`，先预热，`-r 5`，
+取中位数，三个上下文深度）。采纳阈值：`pp512@d65536` 或 `tg128` 变化超过 3%
+（若只有 `tg128` 增益，需预填充不回退才保留）。
+
+| flag | Δ pp512@d65536 | Δ tg128@d65536 | 结论 |
+|---|---|---|---|
+| `GGML_VK_ALLOW_GRAPHICS_QUEUE=1` | +0.2 % | +2.9 % | 拒绝 |
+| `GGML_VK_MAX_NODES_PER_SUBMIT=500` | −0.3 % | +0.2 % | 拒绝 |
+| `GGML_VK_FORCE_MMVQ=1` | −0.2 % | +0.0 % | 拒绝 |
+| `GGML_VK_DISABLE_MMVQ=1` | −0.4 % | +0.0 % | 拒绝 |
+
+**结论：保持默认值，不设任何标志。** `ALLOW_GRAPHICS_QUEUE` 是唯一有真实信号的
+（生成稳定 +2.2…+2.9%，预填充不回退），但仍低于阈值；MMVQ 开关是空操作，因为
+gfx900 没有 DP4A。完整表格和精确命令见
+[docs/benchmarks.md](docs/benchmarks.md)。
+
+> **bench 陷阱：** `llama-bench -dev Vulkan0,Vulkan1` 并*不会*把模型拆分到两张卡上
+> （全部落到 `Vulkan0`，pp512 199 / tg128 8.7，而非 521 / 45.6）。`llama-server`
+> 不受影响 —— 同样的 `-dev` 会正确加载两张卡。bench 时省略 `-dev`，server 时保留。
+
 ---
 
 ## 为什么是 64K，而不是 226K
