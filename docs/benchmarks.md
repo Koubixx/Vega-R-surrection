@@ -114,6 +114,10 @@ llama-batched-bench -m Groot-Q5_K_S.gguf -ngl 99 -sm layer \
 | 2048 | 128 | 2 | 4352 | 703.49 | 64.25 | 443.76 |
 | 2048 | 128 | 4 | 8704 | 728.36 | **76.91** | **486.14** |
 
+**Reproducibility:** two independent runs gave 45.00 / 45.20 (B=1), 64.96 / 65.01 (B=2)
+and 78.08 / 78.13 tok/s (B=4) — a spread under 0.5 % on generation, under 2.5 % on
+prefill. The +73 % is not noise.
+
 ### The most important table here
 
 Aggregate generation throughput goes **45 → 78 tok/s (+73 %)** from batch 1 to batch 4.

@@ -216,7 +216,8 @@ identique et **ne sont pas** comparables aux chiffres de `lm-evaluation-harness`
 | 2 | 65,0 tok/s | 32,5 |
 | 4 | **78,1 tok/s** | 19,5 |
 
-**+73 % de débit agrégé** en passant d'une à quatre séquences. Avec le split de
+**+73 % de débit agrégé** en passant d'une à quatre séquences (deux passes
+indépendantes : 45,00/45,20, 64,96/65,01, 78,08/78,13 tok/s — moins de 0,5 % d'écart). Avec le split de
 couches sur deux cartes, une séquence seule est traitée séquentiellement — GPU0 fait sa
 moitié des couches, puis GPU1 la sienne — donc à batch 1 la seconde carte tourne au
 ralenti la moitié du temps. Le batch la remplit.

@@ -208,7 +208,8 @@ prompt format. They are valid for comparing two quants on identical ground and a
 | 2 | 65.0 tok/s | 32.5 |
 | 4 | **78.1 tok/s** | 19.5 |
 
-**+73 % aggregate throughput** going from one to four sequences. With layer split on
+**+73 % aggregate throughput** going from one to four sequences (two independent
+runs: 45.00/45.20, 64.96/65.01, 78.08/78.13 tok/s — under 0.5 % spread). With layer split on
 two cards, a single sequence is processed sequentially — GPU0 does its half of the
 layers, then GPU1 does its half — so at batch 1 the second card idles about half the
 time. Batching fills it.
